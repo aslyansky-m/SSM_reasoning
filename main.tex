@@ -1,0 +1,285 @@
+\pdfoutput=1
+\documentclass[11pt]{article}
+\usepackage{ACL2023}
+\usepackage{times}
+\usepackage{float}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow} 
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{framed}
+\usepackage{hyperref}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\title{Reasoning in State Space Models}
+
+
+\author{Maksym Aslyanskyi ~~~~~
+  Yoav Dvoishes ~~~~~
+  Shai Perach ~~~~~
+  Anna Petrenko \\
+  \mbox{}\\
+  School of Computer Science, Tel-Aviv University \\
+  \small{\texttt{\{maksyma,yoavdvoishes,annap\}@mail.tau.ac.il},~\texttt{shai.perach@weizmann.ac.il}}}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+This study investigates the reasoning performance of open-source Large Language Models (LLMs) when exposed to extended input lengths. Building upon the Flexible Length Question Answering (FLenQA) dataset introduced in the paper "Same Task, More Tokens" ~\citep{levy-etal-2024-task}, we benchmarked open-source models such as Mamba, RWKV, and LLaMA. Our findings reveal that, despite their design to handle extended contexts, these models exhibit significant performance degradation in reasoning tasks as input lengths increase. Furthermore, qualitative analysis suggests that some models fail to adhere to task-specific instructions, highlighting gaps in their ability to process and reason over complex inputs effectively. This work underscores the challenges and opportunities in enhancing reasoning capabilities in open-source LLMs.
+\end{abstract}
+
+\section{Introduction}
+
+Large Language Models (LLMs) have demonstrated remarkable capabilities across a wide range of tasks, including question answering, summarization, and creative text generation. However, their performance often diminishes when exposed to inputs approaching their maximum context length. Understanding how input length affects reasoning performance is critical for both theoretical advancements and practical applications.
+
+Recently there have been proposed new competitive recurrent architectures for LLMs,
+such as SSMs and RWKV. However, they have not been benchmarked as extensively as transformers.
+Specifically, it is interesting to understand how well they perform on tasks that require reasoning over
+multiple pieces of text and how well their selection mechanism operates in such cases.
+
+This study extends the work of "Same Task, More Tokens: the Impact of Input Length on the Reasoning Performance of Large Language Models"~\citep{levy-etal-2024-task} by applying its reasoning benchmark, the FLenQA dataset, to open-source models based on SSM and RWKV architecture, in addition to transformers. Our goal is to evaluate how well these models reason over long inputs and whether they can generalize effectively to such scenarios. Using models such as Mamba, RWKV, and LLaMA, we evaluate their performance across different input lengths and examine their failure modes. 
+
+
+
+\begin{figure}\centering\includegraphics[width=\columnwidth]{pdfs/figure1.pdf}\captionof{figure}{Normalized responses distribution for differ-
+ent models with and without CoT prompting}\end{figure}
+
+
+\section{Previous Work}
+~\citealp{levy-etal-2024-task} investigate how LLMs handle extended input lengths during reasoning tasks. Previous studies that benchmark models over tasks involving longer inputs, including reasoning tasks, have shown that LLMs often struggle with reasoning over long inputs. However, these studies did not properly control their variables, varying both the input length and the associated tasks to be performed, making it challenging to isolate the effect of input length alone.
+
+To address this gap, the authors introduced the Flexible Length Question Answering (FLenQA) dataset. This novel dataset was specifically designed to explore how LLMs perform when tasked with reasoning over varying input lengths. By embedding relevant information within background texts of different lengths and types, the authors isolated the effect of input length on reasoning performance. Their analysis revealed that the accuracy of Transformer LLMs reasoning decreases significantly as input lengths increase, highlighting a critical limitation of current models.
+Furthermore, they found that in most models \textit{Chain-of-Thought} (CoT) prompting \citep{kojima2022large,wei2022chain} (utilizing an optimized instruction \citep{zhou2022large}) did not mitigate the degradation of performance when inputs are longer.
+
+\subsection{FLenQA}
+Each sample in FLenQA begins as a base instance containing only the essential components for reasoning: (1) an \emph{optional prefix} that might introduce the task or supporting facts; (2) \emph{two key paragraphs} (each led by a critical \emph{key sentence}); and (3) an \emph{optional suffix} (e.g a question). From these minimal base-instances longer variants are created by embedding the same two key paragraphs into additional background text.
+The two key sentences together hold the information necessary to answer the question.
+Key sentences are expanded into thematically-coherent key paragraphs using GPT-4, prompted to extend the sentences without adding new information.
+
+\subsubsection{Data Properties}
+% should be rephrased..
+The FLenQA dataset was designed with several critical data requirements to ensure it effectively isolates the impact of input length on reasoning performance:
+\paragraph{Ensuring models reason over the input}
+\begin{enumerate}
+    \item {Each data sample should contain several relevant text spans that are both necessary and sufficient to correctly solve the task}.
+    \item {All relevant spans must be consulted jointly to reach a successful solution}.
+    \item {The question and supporting relevant spans should consist of novel facts not seen in training.}
+\end{enumerate}
+
+\paragraph{Isolating the length factor}
+\begin{enumerate}
+    \item {The required reasoning should be independent of the length of the sample}: the relevant spans should remain the same in all length variations.
+    \item The padding (text added to control the samples' length) should not contradict or interfere with the reasoning over the relevant text spans.
+    \item The location of each relevant span within the input should be controllable.
+\end{enumerate}
+
+\paragraph{Maintaining natural-looking inputs}
+The input should reflect something a user may naturally use in an LLM prompt. To best maintain the naturality of the inputs while changing an input's length,  the input is required to be cohesive at least at the level of paragraphs.
+
+
+\subsubsection{Tasks}
+The FLenQA dataset consists of three reasoning tasks: Monotone Relations (MonoRel), People in Rooms (PIR), and a simplified version of Ruletaker \citep{clark2021transformers}.
+\begin{enumerate}
+    \item {Monotone Relations (MonoRel)}: Involves reasoning over monotonic relationships (e.g, age or size comparisons) between individuals.
+    \item {People in Rooms (PIR)}: One key paragraph describes a person’s location in a named room, and the other describes a property of that location (e.g, “the old library has wooden floors”).
+    The task is to infer whether the person is in a room with that particular property (e.g, “Is Person X in a marble-floored room?”).
+    \item {Simplified Ruletaker}: Each instance consists of a logical rule, two factual sentences, and a question over the rule and facts. The model must decide whether the question logically follows from the provided rule and facts.
+\end{enumerate}
+ Each task consists of 100 base instances, from which variations of differing lengths, background texts, and facts locations are created. Each task is completely balanced in its label distribution (``True" and ``False"). Most base-instances are solved correctly by the transformer LLMs when presented without padding.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[scale=0.35]{pdfs/padding_h.pdf}
+
+    \caption{\textbf{Inputs construction.} Key sentences (dark red), are expanded to key paragraphs (light red) which are dispersed in controlled locations among padding text (grey) which is irrelevant to the task.}
+    \label{fig:padding}
+\end{figure}
+\subsubsection{Padding}
+The study varied input lengths by embedding key paragraphs within background texts of varying lengths and types. This padding allowed the authors to control the input length while keeping the relevant reasoning content constant.
+\paragraph{Input length} Each base instance is expanded to input lengths of roughly 250, 500, 1000, 2000, and 3000 tokens by adding padding.
+\paragraph{Background Text} For each base-instance and length pair three different  sources of background text (padding) are employed:
+\begin{enumerate}
+    \item \emph{Duplicate}: Both key paragraphs are duplicated in alternating order without any modification to achieve the target length of the sample.
+    \item \emph{Similar}: The background text is composed of paragraphs sampled from other base instances of the same task. Paragraphs that contain entities appearing in the key paragraphs are excluded.
+    \item \emph{Different}: A random (continuous) text is sampled from the Book Corpus \citep{bookcorpus}.
+\end{enumerate}
+
+\paragraph{Location of key paragraphs in the text}
+ The key paragraphs are placed in four different positions within the background text:
+ \begin{enumerate}
+    \item \emph{Key paragraphs first}: Both key paragraphs are placed at the beginning, followed by padding.
+    \item \emph{Key paragraphs middle}: Padding is split before and after the two paragraphs, which remain adjacent but appear in the center of the text.
+    \item \emph{Key paragraphs last}: : All padding appears first, culminating in the two relevant paragraphs at the end.
+    \item \emph{Random placement}: Key paragraphs are dispersed randomly within the background text.
+\end{enumerate}
+
+A visual representation is provided in Figure \ref{fig:padding}.\\
+
+ 
+\section{Model}
+
+\subsection{Emerging LLM Architectures}
+
+Since the advent of transformers in large language models (LLMs), several novel architectures have emerged, leveraging the strengths of transformers while mitigating their limitations. Notable among these are the Recurrent Weighted Key Value (RWKV) model and the MAMBA State Space Model (SSM), both of which focus on improving efficiency and handling extended sequence lengths more effectively.
+
+\begin{itemize}
+    \item \textbf{Transformers}: The foundation of modern LLMs, transformers utilize self-attention mechanisms to process input sequences. However, their quadratic complexity in relation to sequence length poses significant computational challenges.
+    
+    \item \textbf{RWKV}: Introduced in \textit{RWKV: Reinventing RNNs for the Transformer Era} (Dec 2023), RWKV is a recurrent architecture designed to combine the high-quality outputs and efficient training of transformers with the inference efficiency of RNNs. Unlike traditional transformers that rely on self-attention, RWKV employs a variant of linear attention, enabling it to process much longer sequences without incurring prohibitive computational costs.
+    
+    \item \textbf{MAMBA}: Presented in \textit{Mamba: Linear-Time Sequence Modeling with Selective State Spaces} (May 2024), MAMBA leverages SSMs, which are known for their computational efficiency over long sequences. It introduces gating mechanisms that selectively propagate or discard information, allowing the model to perform content-based reasoning effectively.
+\end{itemize}
+
+The RWKV model’s linear attention mechanism preserves relevant key-value pairs over time, facilitating the retention of information across extended contexts. This design suggests that RWKV may excel in tasks requiring the comprehension of dependencies spanning thousands of tokens.
+
+Both RWKV and MAMBA aim to achieve strong reasoning performance while theoretically supporting infinite context lengths by effectively retaining relevant information from distant sections of a sequence. To evaluate this capability, we will assess their performance on tasks that require retrieving and integrating information spread across extensive sequences.
+
+\subsection{Open Source Models}
+
+For our evaluation, we selected five publicly available models from Hugging Face. 
+Refer to Table~\ref{tab:models} for further details. To ensure efficient evaluation, we employed the VLLM framework~\citep{kwon2023efficient}, which significantly accelerates inference speed.
+
+\input{tables/models}
+
+\subsection*{Code Availability}
+All the code for model inference and data analysis used in this paper is available in the following repository: \href{https://github.com/aslyansky-m/SSM\_reasoning}{https://github.com/aslyansky-m/SSM\_reasoning}.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Results}
+
+Our evaluations revealed the following key findings:
+
+\begin{itemize}
+\item \textbf{Weaker Performance Trends}: Overall, models exhibited lower-than-expected accuracy, with emerging patterns being notably noisier and weaker than reported in previous studies.
+\item \textbf{Flattened Accuracy Curve}: The relationship between input length and normalized accuracy was significantly flatter than anticipated, deviating from prior benchmarks.
+\item \textbf{Poor Model Performance}: Several models demonstrated particularly weak performance, struggling to generalize or adhere to task constraints.
+\end{itemize}
+
+\subsection{Qualitative Observations}
+Models frequently misunderstood task instructions, especially in cases where key information was dispersed within lengthy padding. For example, in the following response, the model extended the input prompt rather than answering True/False as it was instructed:
+\begin{quote}
+\textit{True/False Question: Is Jonathan Fritz in Anna's old library? \\
+Answer only True or False. \\
+True/False Question: Is Jonathan Fritz in a white walled room? \\
+Answer only True or False.}
+\end{quote}
+
+\subsection{Impact of input sequence length}
+
+As shown in Figure 1, models exhibited weaker-than-expected performance trends with respect to input sequence length. The normalized accuracy curve remained notably flatter than reported in prior work, suggesting that increasing input length did not yield the expected degradation in model understanding. Instead, emerging patterns were noisier, and performance gains were minimal or inconsistent across different architectures. Some models, in particular \textit{LLama 3.1}, struggled significantly, failing to generalize effectively when presented with all the input sequences.
+
+
+\subsection{Impact of Chain-of-Thoughts prompting}
+
+One of the parameters in the dataset is the use of Chain-of-Thought (COT) \citep{wei2023chainofthoughtpromptingelicitsreasoning} prompting. For example, in the PIR dataset the following structure was used with highlighted part indicating CoT prompt structure:
+
+
+\begin{figure}[H]
+    \begin{framed}
+        \textbf{PIR prompt - CoT:}\\
+        \small
+        \texttt{
+        Show your steps then answer with 'true' or 'false'.\\
+        \{facts + padding\}\\
+        True/False Question: \{question\}\\ 
+        \textbf{\textcolor{blue}{Let's work this out in a step-by-step way to be sure we have the right answer.}}
+        }
+        \normalsize
+    \end{framed}
+\end{figure}
+
+As can be seen in the Figure 4, and contrary to the expectations, most models suffer significant degradation in performance. Only RWKV's performance stayed on the same level.  
+
+\includegraphics[width=\columnwidth]{pdfs/figure4.pdf}
+\captionof{figure}{Averaged performance of the models with and without CoT prompting}
+
+Manual inspection of responses revealed that models struggled to generate binary outputs despite following logical reasoning. For example:
+\begin{quote}
+\small
+\textit{
+Step 1: We know that John’s living room is marble-floored.  \\
+Step 2: We know that Ethan Washington is in John’s living room.  \\
+Step 3: We know that the truth that Ethan Washington is in John’s living room is as intrinsic to the building as its very foundations\\} 
+\end{quote}
+Upon farther investigation we've noticed that when CoT is used, most models failed to provide correct binary answer even though they followed the logic. \\
+To illustrate this, in Figure 5 we show distribution of normalized responses (after post processing) which can be 'refused' when model fails to give 'true' or 'false' answer.  
+
+\includegraphics[width=\columnwidth]{pdfs/figure7.pdf}
+\captionof{figure}{Normalized responses distribution for different models with or without CoT prompting}
+
+\subsection{Impact of fact placing}
+
+Next, we investigated the impact of fact placing on the models' performance.
+\includegraphics[width=\columnwidth]{pdfs/figure6.pdf}
+\captionof{figure}{Normalized responses distribution for different models without CoT prompting for placing in  \textit{first} and \textit{last} positions}
+
+As can be seen, the general trend is that for \textit{first} placing we get a slight improvement in the accuracy, indicating that the models do a better job retaining useful information in this case. \\
+\textit{Mamba2} and \textit{LLama} models show a different behavior when we get a slight boost for \textit{last} placing. \\
+\includegraphics[width=\columnwidth]{pdfs/figure2b.pdf}
+\captionof{figure}{Normalized responses distribution of Mamba2 model for different fact placing}
+
+Another interesting observation, is that these models show different trends with regard to the input length, where accuracy of LLama increases with input length.
+
+
+\includegraphics[width=\columnwidth]{pdfs/figure2a.pdf}
+\captionof{figure}{Normalized responses distribution of LLama model for different fact placing}
+
+\subsection{Performance on different datasets}
+
+Comparing between different datasets we've observed that the general trend is that \textit{PIR} dataset was the easiest while \textit{Simplified Ruletaker} the hardest. Most notably Mistral model achieved an impressive accuracy of 85 percent on \textit{PIR}.
+
+\includegraphics[width=\columnwidth]{pdfs/figure5.pdf}
+\captionof{figure}{Average normalized accuracy of the models on different datasets}
+
+\subsection{Impact of padding styles}
+
+The last experiment shows that padding styles do not have a significant impact on accuracy.
+
+\includegraphics[width=\columnwidth]{pdfs/figure3.pdf}
+\captionof{figure}{Impact of padding styles on normalized accuracy}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Discussion and Future Work}
+
+Our study was constrained by technical limitations, leading us to select smaller models with suboptimal performance. Consequently, we were unable to observe meaningful trends in our experiments. One of the key challenges was the computational cost associated with larger models, which prevented us from fully exploring the capabilities of architectures like RWKV and Mamba.
+
+Additionally, we attempted to visualize the attention mechanism in Mamba but could not find a suitable implementation. The RWKV model posed another challenge, as its core implementation is written in C, making internal modifications and visualization difficult. 
+
+There are, however, promising directions for future work. Recent papers offer valuable insights into Mamba's inner workings:
+
+\begin{itemize}
+    \item \textbf{The Hidden Attention of Mamba Models} \cite{ali2024hiddenattentionmambamodels} proposes a new perspective on Mamba’s attention mechanism, aligning it with self-attention in Transformers. This work provides methods for explainability that could be beneficial in future studies.
+    \item \textbf{Locating and Editing Factual Associations in Mamba} \cite{sharma2024locatingeditingfactualassociations} investigates how Mamba recalls factual information, comparing its internal mechanisms to Transformer-based models. This could help in better understanding knowledge recall in state-space models.
+\end{itemize}
+
+Exploring these methods and adapting their techniques to our experiments could provide deeper insights into the architectures under consideration. Future work should focus on utilizing larger models with more computational resources and incorporating the visualization techniques proposed in recent research.
+
+\section{Conclusion}
+
+Due to technical limitations, we had to rely on smaller models with weaker performance. As a result, we were unable to observe the expected trends, limiting our ability to draw strong conclusions. While larger models could have provided better insights, their implementations were either unavailable (Mamba) or impractical to modify (RWKV, due to its C-based implementation). \\
+
+Future work should focus on overcoming these limitations by leveraging more powerful computational resources and incorporating recent advancements in model explainability and visualization techniques. \\
+
+% Entries for the entire Anthology, followed by custom entries
+\bibliography{anthology,custom}
+\bibliographystyle{acl_natbib}
+
+\appendix
+
+% \section{Example Appendix}
+% \label{sec:appendix}
+
+% This is a section in the appendix.
+
+\end{document}
